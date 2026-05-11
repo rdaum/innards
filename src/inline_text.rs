@@ -8,9 +8,11 @@ use std::time::Duration;
 use crate::config::{InnardsConfig, KeyPress, Keymap, KeymapMatch};
 use anyhow::{Context, Result, anyhow};
 use crossterm::ExecutableCommand;
-use crossterm::cursor::MoveTo;
+use crossterm::cursor::{MoveTo, Show};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, size,
+};
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 use ropey::Rope;
@@ -54,6 +56,8 @@ const INLINE_KEY_BINDINGS: &[(&str, &[&str])] = &[
     ("insert_tab", &["tab"]),
     ("shrink_height", &["alt-up"]),
     ("grow_height", &["alt-down"]),
+    ("fullscreen", &["ctrl-x 1"]),
+    ("restore_inline", &["ctrl-x 0"]),
     ("fill_paragraph", &["alt-q"]),
     ("quit_view", &["esc", "q"]),
 ];
@@ -87,6 +91,8 @@ const INLINE_NORMAL_ACTIONS: &[&str] = &[
     "insert_tab",
     "shrink_height",
     "grow_height",
+    "fullscreen",
+    "restore_inline",
     "fill_paragraph",
 ];
 const INLINE_VIEW_ACTIONS: &[&str] = &[
@@ -106,10 +112,14 @@ const INLINE_VIEW_ACTIONS: &[&str] = &[
     "page_down",
     "shrink_height",
     "grow_height",
+    "fullscreen",
+    "restore_inline",
 ];
 const INLINE_SEARCH_ACTIONS: &[&str] = &[
     "quit",
     "save",
+    "fullscreen",
+    "restore_inline",
     "search_forward",
     "search_reverse",
     "cancel_search",
@@ -277,6 +287,8 @@ struct Editor {
     status: String,
     pending_keys: Vec<KeyPress>,
     height: u16,
+    restore_height: Option<u16>,
+    fullscreen: bool,
     fill_column: usize,
     last_drawn_height: u16,
     last_drawn_top: u16,
@@ -321,6 +333,8 @@ impl Editor {
             status: mode.initial_status().to_string(),
             pending_keys: Vec::new(),
             height: height.max(MIN_HEIGHT),
+            restore_height: None,
+            fullscreen: false,
             fill_column,
             last_drawn_height: height.max(MIN_HEIGHT),
             last_drawn_top: 0,
@@ -1213,6 +1227,18 @@ fn handle_inline_action(
             }
             Ok(None)
         }
+        "fullscreen" => {
+            if let Some(terminal) = terminal {
+                fullscreen_inline_editor(app, terminal)?;
+            }
+            Ok(None)
+        }
+        "restore_inline" => {
+            if let Some(terminal) = terminal {
+                restore_inline_editor(app, terminal)?;
+            }
+            Ok(None)
+        }
         "fill_paragraph" if mode.is_editable() => {
             app.fill_paragraph(app.fill_column);
             Ok(None)
@@ -1246,6 +1272,11 @@ fn resize_inline_editor(
     terminal: &mut TerminalGuard,
     requested_height: u16,
 ) -> Result<()> {
+    if app.fullscreen {
+        app.status = "fullscreen".to_string();
+        return Ok(());
+    }
+
     let max_height = size().map(|(_, rows)| rows).unwrap_or(app.height);
     let height = requested_height.max(MIN_HEIGHT).min(max_height);
     if height == app.height {
@@ -1264,6 +1295,44 @@ fn resize_inline_editor(
     app.last_drawn_height = height;
     app.last_drawn_top = anchor_y;
     app.status = format!("height {height}");
+    Ok(())
+}
+
+fn fullscreen_inline_editor(app: &mut Editor, terminal: &mut TerminalGuard) -> Result<()> {
+    let (_, rows) = size().unwrap_or((0, app.height));
+    let target = rows.max(MIN_HEIGHT);
+    if app.fullscreen {
+        app.status = "fullscreen".to_string();
+        return Ok(());
+    }
+
+    if app.restore_height.is_none() {
+        app.restore_height = Some(app.height);
+    }
+    terminal.enter_fullscreen()?;
+    app.height = target;
+    app.last_drawn_height = target;
+    app.last_drawn_top = 0;
+    app.fullscreen = true;
+    app.status = "fullscreen".to_string();
+    Ok(())
+}
+
+fn restore_inline_editor(app: &mut Editor, terminal: &mut TerminalGuard) -> Result<()> {
+    let Some(height) = app.restore_height.take() else {
+        app.status = "already inline".to_string();
+        return Ok(());
+    };
+    if app.fullscreen {
+        terminal.leave_fullscreen(height)?;
+        app.height = height.max(MIN_HEIGHT);
+        app.last_drawn_height = app.height;
+        app.last_drawn_top = 0;
+        app.fullscreen = false;
+    } else {
+        resize_inline_editor(app, terminal, height)?;
+    }
+    app.status = format!("height {}", app.height);
     Ok(())
 }
 
@@ -1410,6 +1479,8 @@ mod tests {
             status: String::new(),
             pending_keys: Vec::new(),
             height: DEFAULT_HEIGHT,
+            restore_height: None,
+            fullscreen: false,
             fill_column: DEFAULT_FILL_COLUMN,
             last_drawn_height: DEFAULT_HEIGHT,
             last_drawn_top: 0,
@@ -1690,6 +1761,28 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_x_fullscreen_bindings_are_available() {
+        let keymap = test_keymap();
+        let ctrl_x = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        let one = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::empty());
+        let zero = KeyEvent::new(KeyCode::Char('0'), KeyModifiers::empty());
+        let pending = vec![keymap.keypress_from_event(&ctrl_x).unwrap()];
+
+        assert_eq!(
+            keymap.match_key_for_actions(INLINE_NORMAL_ACTIONS, &[], &ctrl_x),
+            KeymapMatch::Prefix
+        );
+        assert_eq!(
+            keymap.match_key_for_actions(INLINE_NORMAL_ACTIONS, &pending, &one),
+            KeymapMatch::Action("fullscreen".to_string())
+        );
+        assert_eq!(
+            keymap.match_key_for_actions(INLINE_NORMAL_ACTIONS, &pending, &zero),
+            KeymapMatch::Action("restore_inline".to_string())
+        );
+    }
+
+    #[test]
     fn ctrl_g_cancels_incremental_search() {
         let mut editor = editor_with("abc foo");
         editor.cursor_col = 2;
@@ -1721,16 +1814,26 @@ mod tests {
 
 struct TerminalGuard {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    mode: TerminalMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalMode {
+    Inline,
+    Fullscreen,
 }
 
 impl TerminalGuard {
     fn enter(height: u16) -> Result<Self> {
         enable_raw_mode()?;
-        let terminal = Self::new_terminal(height)?;
-        Ok(Self { terminal })
+        let terminal = Self::new_inline_terminal(height)?;
+        Ok(Self {
+            terminal,
+            mode: TerminalMode::Inline,
+        })
     }
 
-    fn new_terminal(height: u16) -> Result<Terminal<CrosstermBackend<Stdout>>> {
+    fn new_inline_terminal(height: u16) -> Result<Terminal<CrosstermBackend<Stdout>>> {
         let stdout = io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::with_options(
@@ -1742,10 +1845,47 @@ impl TerminalGuard {
         Ok(terminal)
     }
 
+    fn new_fullscreen_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
+        let stdout = io::stdout();
+        let backend = CrosstermBackend::new(stdout);
+        let terminal = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Fullscreen,
+            },
+        )?;
+        Ok(terminal)
+    }
+
     fn resize(&mut self, height: u16, anchor_y: u16) -> Result<()> {
+        debug_assert_eq!(self.mode, TerminalMode::Inline);
         self.terminal.clear()?;
         io::stdout().execute(MoveTo(0, anchor_y))?;
-        self.terminal = Self::new_terminal(height)?;
+        self.terminal = Self::new_inline_terminal(height)?;
+        Ok(())
+    }
+
+    fn enter_fullscreen(&mut self) -> Result<()> {
+        if self.mode == TerminalMode::Fullscreen {
+            return Ok(());
+        }
+        self.terminal.clear()?;
+        io::stdout().execute(EnterAlternateScreen)?;
+        self.terminal = Self::new_fullscreen_terminal()?;
+        self.terminal.clear()?;
+        self.mode = TerminalMode::Fullscreen;
+        Ok(())
+    }
+
+    fn leave_fullscreen(&mut self, height: u16) -> Result<()> {
+        if self.mode == TerminalMode::Inline {
+            return Ok(());
+        }
+        self.terminal.clear()?;
+        io::stdout().execute(LeaveAlternateScreen)?;
+        self.terminal = Self::new_inline_terminal(height)?;
+        self.terminal.clear()?;
+        self.mode = TerminalMode::Inline;
         Ok(())
     }
 }
@@ -1753,8 +1893,12 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = self.terminal.clear();
+        if self.mode == TerminalMode::Fullscreen {
+            let _ = io::stdout().execute(LeaveAlternateScreen);
+        }
         let _ = disable_raw_mode();
         let _ = self.terminal.show_cursor();
+        let _ = io::stdout().execute(Show);
         let _ = io::stdout().flush();
     }
 }

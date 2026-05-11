@@ -157,6 +157,8 @@ Core keys:
 ```text
 Ctrl-X Ctrl-S     Save
 Ctrl-X Ctrl-C     Quit
+Ctrl-X 1          Expand to the full terminal height
+Ctrl-X 0          Restore the previous inline height
 Ctrl-S            Incremental search forward
 Ctrl-R            Incremental search backward
 Ctrl-S/Ctrl-R     Repeat search while searching
@@ -228,6 +230,8 @@ fill_column = 100
 
 [keybindings.inline]
 fill_paragraph = "alt-q"
+fullscreen = "ctrl-x 1"
+restore_inline = "ctrl-x 0"
 save = "ctrl-x ctrl-s"
 quit = "ctrl-x ctrl-c"
 search_forward = "ctrl-s"
@@ -258,8 +262,8 @@ quit, save, search_forward, search_reverse, cancel_search, finish_search,
 cancel_mark, set_mark, undo, redo, line_start, line_end, word_left,
 word_right, char_left, char_right, line_up, line_down, page_up, page_down,
 copy_region, kill_region, kill_to_eol, yank, delete_char, backspace,
-insert_newline, insert_tab, shrink_height, grow_height, fill_paragraph,
-quit_view
+insert_newline, insert_tab, shrink_height, grow_height, fullscreen,
+restore_inline, fill_paragraph, quit_view
 ```
 
 `navsplat` actions:
