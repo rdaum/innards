@@ -23,3 +23,25 @@ tui-spinner = "0.2.3"
 tui-input = "0.15.3"
 toml = "0.9.8"
 url = "2.5.7"
+
+[package.metadata.deb]
+name = "innards"
+maintainer = "Ryan Daum <ryan.daum@gmail.com>"
+copyright = "2026, Ryan Daum"
+license-file = ["LICENSE", "0"]
+extended-description = """
+Innards is a set of inline terminal tools for moving through source code
+without losing shell context. It includes navsplat, a rust-analyzer-backed
+symbol picker; inmacs, a small inline editor; and inpage, a read-only inline
+pager.
+"""
+section = "utils"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/navsplat", "usr/bin/navsplat", "755"],
+    ["target/release/inmacs", "usr/bin/inmacs", "755"],
+    ["target/release/inpage", "usr/bin/inpage", "755"],
+    ["README.md", "usr/share/doc/innards/README.md", "644"],
+    ["LICENSE", "usr/share/doc/innards/LICENSE", "644"],
+]

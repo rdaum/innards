@@ -44,6 +44,15 @@ cargo build --release --bins
 
 The binaries will be under `target/release/`.
 
+Build a Debian package with `cargo-deb`:
+
+```sh
+cargo install cargo-deb
+cargo deb
+```
+
+The `.deb` will be written under `target/debian/`.
+
 ## Install
 
 Install from a local checkout:
