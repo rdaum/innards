@@ -14,6 +14,7 @@ use super::MIN_HEIGHT;
 pub(super) struct TerminalGuard {
     pub(super) terminal: Terminal<CrosstermBackend<Stdout>>,
     pub(super) mode: TerminalMode,
+    clear_on_drop: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,6 +30,7 @@ impl TerminalGuard {
         Ok(Self {
             terminal,
             mode: TerminalMode::Inline,
+            clear_on_drop: true,
         })
     }
 
@@ -87,11 +89,17 @@ impl TerminalGuard {
         self.mode = TerminalMode::Inline;
         Ok(())
     }
+
+    pub(super) fn preserve_on_drop(&mut self) {
+        self.clear_on_drop = false;
+    }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = self.terminal.clear();
+        if self.clear_on_drop {
+            let _ = self.terminal.clear();
+        }
         if self.mode == TerminalMode::Fullscreen {
             let _ = io::stdout().execute(LeaveAlternateScreen);
         }

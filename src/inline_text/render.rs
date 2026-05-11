@@ -60,6 +60,24 @@ pub(super) fn draw(
     }
 }
 
+pub(super) fn draw_plain_view(frame: &mut Frame<'_>, app: &mut Editor) {
+    let area = frame.area();
+    frame.render_widget(Clear, area);
+    let width = area.width.max(1) as usize;
+    let height = area.height.max(1) as usize;
+    app.ensure_cursor_visible(height, width);
+
+    let end = (app.scroll_y + height).min(app.line_count());
+    let mut lines = Vec::with_capacity(height);
+    for idx in app.scroll_y..end {
+        lines.push(Line::from(line_text(&app.buffer, idx)));
+    }
+    while lines.len() < height {
+        lines.push(Line::from(""));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
 fn render_lines(
     app: &Editor,
     syntax: &SyntaxHighlighter,

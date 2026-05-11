@@ -228,6 +228,8 @@ inpage +120 src/lib.rs
 
 `inpage` accepts the same `--height`, `--line`, and `+LINE` arguments as
 `inmacs`. Editing keys are disabled, but movement and search keys are shared.
+When `inpage` exits, it leaves the final page content in the terminal without
+the inline borders.
 
 Additional pager quit keys:
 

@@ -177,11 +177,30 @@ pub fn run(mode: Mode) -> Result<()> {
         .terminal
         .draw(|frame| render::draw(frame, &mut app, &syntax, mode))?;
     let outcome = run_editor(&mut terminal, &mut app, &syntax, mode, &keymap)?;
+    if mode == Mode::View {
+        persist_view(&mut terminal, &mut app)?;
+    }
     drop(terminal);
 
     match outcome {
         Outcome::Quit => Ok(()),
     }
+}
+
+fn persist_view(terminal: &mut TerminalGuard, app: &mut Editor) -> Result<()> {
+    if app.fullscreen {
+        let height = app.restore_height.take().unwrap_or(app.height);
+        terminal.leave_fullscreen(height)?;
+        app.height = height.max(MIN_HEIGHT);
+        app.last_drawn_height = app.height;
+        app.last_drawn_top = 0;
+        app.fullscreen = false;
+    }
+    terminal
+        .terminal
+        .draw(|frame| render::draw_plain_view(frame, app))?;
+    terminal.preserve_on_drop();
+    Ok(())
 }
 
 struct Config {
