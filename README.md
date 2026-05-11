@@ -1,16 +1,21 @@
 # innards
 
-Small inline terminal tools for jumping around source code and editing files without
+Small "inline" terminal tools for jumping around source code and editing files without
 clearing the shell above them.
 
-On account of agents I spend most of my time in a terminal window these days,
-and often also remote over SSH, and I missed some of the conveniences of an IDE
-but wanted something quick and nimble that didn't break flow.
+On account of agents I spend most of my time in a terminal window these days
+(and often also remote over SSH) and I missed some of the conveniences of an IDE...
+but wanted something quick and nimble that didn't break flow in the shell.
 
 These little utilities let you drop in and out of navigation and editing and
-viewing files but what you were working on visible.
+viewing files but keep what you were working on visible and integrate better into a
+shell oriented workflow.
 
-Quick, and get out of your way.
+In particular: things like writing `git` commit messages, doing quick edits to source files,
+finding the location of some function or symbol, doing interactive rebases, or quick
+document updates.
+
+Basically: Quick to start, and get out of your way quickly after.
 
 ## Demos
 
