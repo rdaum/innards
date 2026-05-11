@@ -7,7 +7,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use syntect::easy::HighlightLines;
 
-use super::{Editor, Mode, SyntaxHighlighter, line_selection_range, line_text};
+use super::Mode;
+use super::buffer::{line_selection_range, line_text};
+use super::editor::Editor;
+use super::syntax::SyntaxHighlighter;
 
 pub(super) fn draw(
     frame: &mut Frame<'_>,
