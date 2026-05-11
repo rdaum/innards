@@ -5,6 +5,7 @@ use std::ops::Range;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::config::{InnardsConfig, KeyPress, Keymap, KeymapMatch};
 use anyhow::{Context, Result, anyhow};
 use crossterm::ExecutableCommand;
 use crossterm::cursor::MoveTo;
@@ -21,6 +22,100 @@ mod render;
 const DEFAULT_HEIGHT: u16 = 16;
 const MIN_HEIGHT: u16 = 5;
 const DEFAULT_FILL_COLUMN: usize = 80;
+
+const INLINE_KEY_BINDINGS: &[(&str, &[&str])] = &[
+    ("quit", &["ctrl-x ctrl-c"]),
+    ("save", &["ctrl-x ctrl-s"]),
+    ("search_forward", &["ctrl-s"]),
+    ("search_reverse", &["ctrl-r"]),
+    ("cancel_search", &["esc", "ctrl-g"]),
+    ("finish_search", &["enter"]),
+    ("cancel_mark", &["ctrl-g"]),
+    ("set_mark", &["ctrl-space", "null"]),
+    ("undo", &["ctrl-/", "ctrl-_", "ctrl-7"]),
+    ("redo", &["ctrl-?"]),
+    ("line_start", &["ctrl-a", "home"]),
+    ("line_end", &["ctrl-e", "end"]),
+    ("word_left", &["alt-b", "ctrl-left"]),
+    ("word_right", &["alt-f", "ctrl-right"]),
+    ("char_left", &["ctrl-b", "left"]),
+    ("char_right", &["ctrl-f", "right"]),
+    ("line_up", &["ctrl-p", "up"]),
+    ("line_down", &["ctrl-n", "down"]),
+    ("page_up", &["alt-v", "pageup"]),
+    ("page_down", &["ctrl-v", "pagedown"]),
+    ("copy_region", &["alt-w"]),
+    ("kill_region", &["ctrl-w"]),
+    ("kill_to_eol", &["ctrl-k"]),
+    ("yank", &["ctrl-y"]),
+    ("delete_char", &["ctrl-d", "delete"]),
+    ("backspace", &["backspace"]),
+    ("insert_newline", &["enter"]),
+    ("insert_tab", &["tab"]),
+    ("shrink_height", &["alt-up"]),
+    ("grow_height", &["alt-down"]),
+    ("fill_paragraph", &["alt-q"]),
+    ("quit_view", &["esc", "q"]),
+];
+
+const INLINE_NORMAL_ACTIONS: &[&str] = &[
+    "quit",
+    "save",
+    "search_forward",
+    "search_reverse",
+    "cancel_mark",
+    "set_mark",
+    "undo",
+    "redo",
+    "line_start",
+    "line_end",
+    "word_left",
+    "word_right",
+    "char_left",
+    "char_right",
+    "line_up",
+    "line_down",
+    "page_up",
+    "page_down",
+    "copy_region",
+    "kill_region",
+    "kill_to_eol",
+    "yank",
+    "delete_char",
+    "backspace",
+    "insert_newline",
+    "insert_tab",
+    "shrink_height",
+    "grow_height",
+    "fill_paragraph",
+];
+const INLINE_VIEW_ACTIONS: &[&str] = &[
+    "quit",
+    "quit_view",
+    "search_forward",
+    "search_reverse",
+    "line_start",
+    "line_end",
+    "word_left",
+    "word_right",
+    "char_left",
+    "char_right",
+    "line_up",
+    "line_down",
+    "page_up",
+    "page_down",
+    "shrink_height",
+    "grow_height",
+];
+const INLINE_SEARCH_ACTIONS: &[&str] = &[
+    "quit",
+    "save",
+    "search_forward",
+    "search_reverse",
+    "cancel_search",
+    "finish_search",
+    "backspace",
+];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
@@ -50,14 +145,28 @@ impl Mode {
 
 pub fn run(mode: Mode) -> Result<()> {
     let config = Config::parse(env::args().skip(1), mode)?;
-    let mut app = Editor::open(config.path.clone(), config.line, config.height, mode)?;
+    let innards_config = InnardsConfig::load()?;
+    let fill_column = innards_config
+        .inmacs
+        .fill_column
+        .unwrap_or(DEFAULT_FILL_COLUMN);
+    let mut keymap = Keymap::from_defaults(INLINE_KEY_BINDINGS)?;
+    keymap.apply_overrides(&innards_config.keybindings.inline)?;
+
+    let mut app = Editor::open(
+        config.path.clone(),
+        config.line,
+        config.height,
+        fill_column,
+        mode,
+    )?;
     let syntax = SyntaxHighlighter::new(&config.path)?;
 
     let mut terminal = TerminalGuard::enter(config.height)?;
     terminal
         .terminal
         .draw(|frame| render::draw(frame, &mut app, &syntax, mode))?;
-    let outcome = run_editor(&mut terminal, &mut app, &syntax, mode)?;
+    let outcome = run_editor(&mut terminal, &mut app, &syntax, mode, &keymap)?;
     drop(terminal);
 
     match outcome {
@@ -166,8 +275,9 @@ struct Editor {
     kill_ring: String,
     dirty: bool,
     status: String,
-    ctrl_x_pending: bool,
+    pending_keys: Vec<KeyPress>,
     height: u16,
+    fill_column: usize,
     last_drawn_height: u16,
     last_drawn_top: u16,
     search: Option<SearchState>,
@@ -177,7 +287,13 @@ struct Editor {
 }
 
 impl Editor {
-    fn open(path: PathBuf, line: Option<usize>, height: u16, mode: Mode) -> Result<Self> {
+    fn open(
+        path: PathBuf,
+        line: Option<usize>,
+        height: u16,
+        fill_column: usize,
+        mode: Mode,
+    ) -> Result<Self> {
         let content = match fs::read_to_string(&path) {
             Ok(content) => content,
             Err(err) if err.kind() == io::ErrorKind::NotFound => String::new(),
@@ -203,8 +319,9 @@ impl Editor {
             kill_ring: String::new(),
             dirty: false,
             status: mode.initial_status().to_string(),
-            ctrl_x_pending: false,
+            pending_keys: Vec::new(),
             height: height.max(MIN_HEIGHT),
+            fill_column,
             last_drawn_height: height.max(MIN_HEIGHT),
             last_drawn_top: 0,
             search: None,
@@ -261,7 +378,7 @@ impl Editor {
         self.dirty = snapshot.dirty;
         self.mark = snapshot.mark;
         self.search = None;
-        self.ctrl_x_pending = false;
+        self.pending_keys.clear();
         self.clamp_cursor();
     }
 
@@ -440,7 +557,7 @@ impl Editor {
             self.mark = Some(point);
             self.status = "mark set".to_string();
         }
-        self.ctrl_x_pending = false;
+        self.pending_keys.clear();
     }
 
     fn cancel_mark(&mut self) {
@@ -449,7 +566,7 @@ impl Editor {
         } else {
             self.status = "quit".to_string();
         }
-        self.ctrl_x_pending = false;
+        self.pending_keys.clear();
     }
 
     fn copy_region(&mut self) {
@@ -459,7 +576,7 @@ impl Editor {
         };
         self.kill_ring = self.buffer.slice(region).to_string();
         self.status = "region copied".to_string();
-        self.ctrl_x_pending = false;
+        self.pending_keys.clear();
     }
 
     fn kill_region(&mut self) {
@@ -643,7 +760,7 @@ impl Editor {
     }
 
     fn begin_search(&mut self, direction: SearchDirection) {
-        self.ctrl_x_pending = false;
+        self.pending_keys.clear();
         self.search = Some(SearchState {
             query: String::new(),
             direction,
@@ -809,7 +926,7 @@ impl Editor {
 
     fn mark_dirty(&mut self) {
         self.dirty = true;
-        self.ctrl_x_pending = false;
+        self.pending_keys.clear();
         self.search = None;
         self.mark = None;
         self.status = "modified".to_string();
@@ -858,6 +975,7 @@ fn run_editor(
     app: &mut Editor,
     syntax: &SyntaxHighlighter,
     mode: Mode,
+    keymap: &Keymap,
 ) -> Result<Outcome> {
     loop {
         if event::poll(Duration::from_millis(80))? {
@@ -865,7 +983,7 @@ fn run_editor(
                 Ok(Event::Key(key))
                     if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
                 {
-                    if let Some(outcome) = handle_key(app, key, terminal, mode)? {
+                    if let Some(outcome) = handle_key(app, key, terminal, mode, keymap)? {
                         return Ok(outcome);
                     }
                 }
@@ -886,114 +1004,20 @@ fn handle_key(
     key: KeyEvent,
     terminal: &mut TerminalGuard,
     mode: Mode,
+    keymap: &Keymap,
 ) -> Result<Option<Outcome>> {
-    if app.ctrl_x_pending {
-        return handle_ctrl_x_chord(app, key, mode);
+    if app.search.is_some() {
+        if let Some(outcome) = handle_key_binding(app, key, terminal, mode, keymap)? {
+            return Ok(outcome);
+        }
+        return handle_search_text_key(app, key);
     }
 
-    if app.search.is_some() {
-        return handle_search_key(app, key);
+    if let Some(outcome) = handle_key_binding(app, key, terminal, mode, keymap)? {
+        return Ok(outcome);
     }
 
     match key.code {
-        _ if is_view_quit_key(mode, key) => return Ok(Some(Outcome::Quit)),
-        KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.ctrl_x_pending = true;
-            app.status = "Ctrl-X ...".to_string();
-        }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.begin_search(SearchDirection::Forward);
-        }
-        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.begin_search(SearchDirection::Reverse);
-        }
-        KeyCode::Char('/')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.undo()
-        }
-        KeyCode::Char('_')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.undo()
-        }
-        KeyCode::Char('7')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.undo()
-        }
-        KeyCode::Char('?')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.redo()
-        }
-        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => app.cancel_mark(),
-        KeyCode::Char(' ') if key.modifiers.contains(KeyModifiers::CONTROL) => app.toggle_mark(),
-        KeyCode::Null
-            if key.modifiers.is_empty() || key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.toggle_mark();
-        }
-        KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => app.cursor_col = 0,
-        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.cursor_col = app.line_len();
-        }
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::ALT) => app.move_word_left(),
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::ALT) => app.move_word_right(),
-        KeyCode::Char('q') if mode.is_editable() && key.modifiers.contains(KeyModifiers::ALT) => {
-            app.fill_paragraph(DEFAULT_FILL_COLUMN)
-        }
-        KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::ALT) => app.copy_region(),
-        KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => app.move_left(),
-        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => app.move_right(),
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => app.move_up(),
-        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => app.move_down(),
-        KeyCode::Char('d')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.delete_char()
-        }
-        KeyCode::Char('k')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.kill_to_eol()
-        }
-        KeyCode::Char('w')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.kill_region()
-        }
-        KeyCode::Char('y')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.yank()
-        }
-        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::ALT) => app.page_up(),
-        KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => app.page_down(),
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) => {
-            resize_inline_editor(app, terminal, app.height.saturating_sub(1))?;
-        }
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) => {
-            resize_inline_editor(app, terminal, app.height.saturating_add(1))?;
-        }
-        KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => app.move_word_left(),
-        KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => app.move_word_right(),
-        KeyCode::Left => app.move_left(),
-        KeyCode::Right => app.move_right(),
-        KeyCode::Up => app.move_up(),
-        KeyCode::Down => app.move_down(),
-        KeyCode::Home => app.cursor_col = 0,
-        KeyCode::End => app.cursor_col = app.line_len(),
-        KeyCode::PageUp => app.page_up(),
-        KeyCode::PageDown => app.page_down(),
-        KeyCode::Backspace if mode.is_editable() => app.backspace(),
-        KeyCode::Delete if mode.is_editable() => app.delete_char(),
-        KeyCode::Enter if mode.is_editable() => app.insert_newline(),
-        KeyCode::Tab if mode.is_editable() => {
-            for _ in 0..4 {
-                app.insert_char(' ');
-            }
-        }
         KeyCode::Char(ch)
             if mode.is_editable()
                 && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
@@ -1006,53 +1030,208 @@ fn handle_key(
     Ok(None)
 }
 
-fn is_view_quit_key(mode: Mode, key: KeyEvent) -> bool {
-    mode == Mode::View
-        && matches!(
-            key.code,
-            KeyCode::Esc | KeyCode::Char('q') if key.modifiers.is_empty()
-        )
-}
+fn handle_key_binding(
+    app: &mut Editor,
+    key: KeyEvent,
+    terminal: &mut TerminalGuard,
+    mode: Mode,
+    keymap: &Keymap,
+) -> Result<Option<Option<Outcome>>> {
+    let actions = if app.search.is_some() {
+        INLINE_SEARCH_ACTIONS
+    } else if mode == Mode::View {
+        INLINE_VIEW_ACTIONS
+    } else {
+        INLINE_NORMAL_ACTIONS
+    };
 
-fn handle_ctrl_x_chord(app: &mut Editor, key: KeyEvent, mode: Mode) -> Result<Option<Outcome>> {
-    app.ctrl_x_pending = false;
-    match key.code {
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            Ok(Some(Outcome::Quit))
+    match keymap.match_key_for_actions(actions, &app.pending_keys, &key) {
+        KeymapMatch::Prefix => {
+            if let Some(key) = keymap.keypress_from_event(&key) {
+                app.pending_keys.push(key);
+                app.status = pending_status(&app.pending_keys);
+            }
+            Ok(Some(None))
         }
-        KeyCode::Char('s')
-            if mode.is_editable() && key.modifiers.contains(KeyModifiers::CONTROL) =>
-        {
-            app.save()?;
-            Ok(None)
+        KeymapMatch::Action(action) => {
+            app.pending_keys.clear();
+            handle_inline_action(app, Some(terminal), mode, action.as_str()).map(Some)
         }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.status = "read-only".to_string();
-            Ok(None)
+        KeymapMatch::None if !app.pending_keys.is_empty() => {
+            app.pending_keys.clear();
+            app.status = "unknown key sequence".to_string();
+            Ok(Some(None))
         }
-        _ => {
-            app.status = "unknown Ctrl-X sequence".to_string();
-            Ok(None)
-        }
+        KeymapMatch::None => Ok(None),
     }
 }
 
-fn handle_search_key(app: &mut Editor, key: KeyEvent) -> Result<Option<Outcome>> {
-    match key.code {
-        KeyCode::Esc => app.cancel_search(),
-        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => app.cancel_search(),
-        KeyCode::Enter => app.finish_search(),
-        KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.ctrl_x_pending = true;
-            app.status = "Ctrl-X ...".to_string();
+fn handle_inline_action(
+    app: &mut Editor,
+    terminal: Option<&mut TerminalGuard>,
+    mode: Mode,
+    action: &str,
+) -> Result<Option<Outcome>> {
+    match action {
+        "quit" => Ok(Some(Outcome::Quit)),
+        "quit_view" if mode == Mode::View => Ok(Some(Outcome::Quit)),
+        "save" if mode.is_editable() => {
+            app.save()?;
+            Ok(None)
         }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        "save" => {
+            app.status = "read-only".to_string();
+            Ok(None)
+        }
+        "search_forward" if app.search.is_some() => {
             app.search_repeat(SearchDirection::Forward);
+            Ok(None)
         }
-        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        "search_forward" => {
+            app.begin_search(SearchDirection::Forward);
+            Ok(None)
+        }
+        "search_reverse" if app.search.is_some() => {
             app.search_repeat(SearchDirection::Reverse);
+            Ok(None)
         }
-        KeyCode::Backspace => app.search_backspace(),
+        "search_reverse" => {
+            app.begin_search(SearchDirection::Reverse);
+            Ok(None)
+        }
+        "cancel_search" => {
+            app.cancel_search();
+            Ok(None)
+        }
+        "finish_search" => {
+            app.finish_search();
+            Ok(None)
+        }
+        "cancel_mark" => {
+            app.cancel_mark();
+            Ok(None)
+        }
+        "set_mark" => {
+            app.toggle_mark();
+            Ok(None)
+        }
+        "undo" if mode.is_editable() => {
+            app.undo();
+            Ok(None)
+        }
+        "redo" if mode.is_editable() => {
+            app.redo();
+            Ok(None)
+        }
+        "line_start" => {
+            app.cursor_col = 0;
+            Ok(None)
+        }
+        "line_end" => {
+            app.cursor_col = app.line_len();
+            Ok(None)
+        }
+        "word_left" => {
+            app.move_word_left();
+            Ok(None)
+        }
+        "word_right" => {
+            app.move_word_right();
+            Ok(None)
+        }
+        "char_left" => {
+            app.move_left();
+            Ok(None)
+        }
+        "char_right" => {
+            app.move_right();
+            Ok(None)
+        }
+        "line_up" => {
+            app.move_up();
+            Ok(None)
+        }
+        "line_down" => {
+            app.move_down();
+            Ok(None)
+        }
+        "page_up" => {
+            app.page_up();
+            Ok(None)
+        }
+        "page_down" => {
+            app.page_down();
+            Ok(None)
+        }
+        "copy_region" => {
+            app.copy_region();
+            Ok(None)
+        }
+        "kill_region" if mode.is_editable() => {
+            app.kill_region();
+            Ok(None)
+        }
+        "kill_to_eol" if mode.is_editable() => {
+            app.kill_to_eol();
+            Ok(None)
+        }
+        "yank" if mode.is_editable() => {
+            app.yank();
+            Ok(None)
+        }
+        "delete_char" if mode.is_editable() => {
+            app.delete_char();
+            Ok(None)
+        }
+        "backspace" if app.search.is_some() => {
+            app.search_backspace();
+            Ok(None)
+        }
+        "backspace" if mode.is_editable() => {
+            app.backspace();
+            Ok(None)
+        }
+        "insert_newline" if mode.is_editable() => {
+            app.insert_newline();
+            Ok(None)
+        }
+        "insert_tab" if mode.is_editable() => {
+            for _ in 0..4 {
+                app.insert_char(' ');
+            }
+            Ok(None)
+        }
+        "shrink_height" => {
+            if let Some(terminal) = terminal {
+                resize_inline_editor(app, terminal, app.height.saturating_sub(1))?;
+            }
+            Ok(None)
+        }
+        "grow_height" => {
+            if let Some(terminal) = terminal {
+                resize_inline_editor(app, terminal, app.height.saturating_add(1))?;
+            }
+            Ok(None)
+        }
+        "fill_paragraph" if mode.is_editable() => {
+            app.fill_paragraph(app.fill_column);
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
+fn pending_status(pending: &[KeyPress]) -> String {
+    let keys = pending
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{keys} ...")
+}
+
+fn handle_search_text_key(app: &mut Editor, key: KeyEvent) -> Result<Option<Outcome>> {
+    match key.code {
         KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             app.search_insert_char(ch);
         }
@@ -1214,6 +1393,10 @@ fn find_in_line_reverse(line: &str, query: &str, end_col: usize) -> Option<usize
 mod tests {
     use super::*;
 
+    fn test_keymap() -> Keymap {
+        Keymap::from_defaults(INLINE_KEY_BINDINGS).unwrap()
+    }
+
     fn editor_with(text: &str) -> Editor {
         Editor {
             path: PathBuf::from("test.txt"),
@@ -1225,8 +1408,9 @@ mod tests {
             kill_ring: String::new(),
             dirty: false,
             status: String::new(),
-            ctrl_x_pending: false,
+            pending_keys: Vec::new(),
             height: DEFAULT_HEIGHT,
+            fill_column: DEFAULT_FILL_COLUMN,
             last_drawn_height: DEFAULT_HEIGHT,
             last_drawn_top: 0,
             search: None,
@@ -1409,20 +1593,34 @@ mod tests {
 
     #[test]
     fn view_mode_esc_and_q_quit() {
+        let keymap = test_keymap();
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
-        assert!(is_view_quit_key(Mode::View, esc));
+        assert_eq!(
+            keymap.match_key_for_actions(INLINE_VIEW_ACTIONS, &[], &esc),
+            KeymapMatch::Action("quit_view".to_string())
+        );
 
         let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty());
-        assert!(is_view_quit_key(Mode::View, q));
+        assert_eq!(
+            keymap.match_key_for_actions(INLINE_VIEW_ACTIONS, &[], &q),
+            KeymapMatch::Action("quit_view".to_string())
+        );
     }
 
     #[test]
     fn edit_mode_esc_and_q_do_not_quit() {
+        let keymap = test_keymap();
         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
-        assert!(!is_view_quit_key(Mode::Edit, esc));
+        assert_eq!(
+            keymap.match_key_for_actions(INLINE_NORMAL_ACTIONS, &[], &esc),
+            KeymapMatch::None
+        );
 
         let q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::empty());
-        assert!(!is_view_quit_key(Mode::Edit, q));
+        assert_eq!(
+            keymap.match_key_for_actions(INLINE_NORMAL_ACTIONS, &[], &q),
+            KeymapMatch::None
+        );
     }
 
     #[test]
@@ -1468,17 +1666,26 @@ mod tests {
     fn ctrl_x_exit_chord_works_while_searching() {
         let mut editor = editor_with("abc");
         editor.begin_search(SearchDirection::Forward);
+        let keymap = test_keymap();
 
         let start = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL);
-        assert_eq!(handle_search_key(&mut editor, start).unwrap(), None);
-        assert!(editor.ctrl_x_pending);
+        assert_eq!(
+            keymap.match_key_for_actions(INLINE_SEARCH_ACTIONS, &[], &start),
+            KeymapMatch::Prefix
+        );
+        editor
+            .pending_keys
+            .push(keymap.keypress_from_event(&start).unwrap());
 
         let exit = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(
-            handle_ctrl_x_chord(&mut editor, exit, Mode::Edit).unwrap(),
+            keymap.match_key_for_actions(INLINE_SEARCH_ACTIONS, &editor.pending_keys, &exit),
+            KeymapMatch::Action("quit".to_string())
+        );
+        assert_eq!(
+            handle_inline_action(&mut editor, None, Mode::Edit, "quit").unwrap(),
             Some(Outcome::Quit)
         );
-        assert!(!editor.ctrl_x_pending);
         assert!(editor.search.is_some());
     }
 
@@ -1492,8 +1699,10 @@ mod tests {
         }
         assert_eq!((editor.cursor_line, editor.cursor_col), (0, 4));
 
-        let cancel = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
-        assert_eq!(handle_search_key(&mut editor, cancel).unwrap(), None);
+        assert_eq!(
+            handle_inline_action(&mut editor, None, Mode::Edit, "cancel_search").unwrap(),
+            None
+        );
 
         assert!(editor.search.is_none());
         assert_eq!((editor.cursor_line, editor.cursor_col), (0, 2));

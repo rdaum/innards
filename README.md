@@ -206,6 +206,70 @@ Esc
 q
 ```
 
+## Configuration
+
+Innards reads TOML configuration from:
+
+```text
+$XDG_CONFIG_HOME/innards/config.toml
+```
+
+If `XDG_CONFIG_HOME` is not set, it falls back to:
+
+```text
+~/.config/innards/config.toml
+```
+
+Example:
+
+```toml
+[inmacs]
+fill_column = 100
+
+[keybindings.inline]
+fill_paragraph = "alt-q"
+save = "ctrl-x ctrl-s"
+quit = "ctrl-x ctrl-c"
+search_forward = "ctrl-s"
+search_reverse = "ctrl-r"
+page_up = ["alt-v", "pageup"]
+page_down = ["ctrl-v", "pagedown"]
+
+[keybindings.navsplat]
+open = "enter"
+quit = ["esc", "ctrl-c"]
+toggle_focus = "tab"
+references = "alt-r"
+callers = "alt-c"
+callees = "alt-e"
+source = "alt-s"
+copy = "alt-y"
+```
+
+Configured action bindings replace the built-in bindings for that action.
+Unmentioned actions keep their defaults. Key names are case-insensitive and can
+use modifiers such as `ctrl-`, `alt-`, and `shift-`. Multi-key sequences are
+written with spaces, for example `ctrl-x ctrl-s`.
+
+Inline actions shared by `inmacs` and `inpage`:
+
+```text
+quit, save, search_forward, search_reverse, cancel_search, finish_search,
+cancel_mark, set_mark, undo, redo, line_start, line_end, word_left,
+word_right, char_left, char_right, line_up, line_down, page_up, page_down,
+copy_region, kill_region, kill_to_eol, yank, delete_char, backspace,
+insert_newline, insert_tab, shrink_height, grow_height, fill_paragraph,
+quit_view
+```
+
+`navsplat` actions:
+
+```text
+quit, quit_if_empty, open, pop, toggle_focus, references, callers, callees,
+source, copy, select_prev, select_next, preview_up, preview_down, page_up,
+page_down, delete_next_char
+```
+
 ## Development
 
 Useful checks:

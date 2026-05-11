@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyEvent};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use navsplat::config::{InnardsConfig, KeyPress, Keymap, KeymapMatch};
 use navsplat::lsp::{self, CallDirection, LocationHit, LspClient, LspEvent, Symbol, SymbolKind};
 use ratatui::backend::CrosstermBackend;
 use ratatui::{Terminal, TerminalOptions, Viewport};
@@ -22,6 +23,46 @@ use tui_input::backend::crossterm::to_input_request;
 use tui_input::{Input, InputRequest};
 
 const DEBOUNCE: Duration = Duration::from_millis(140);
+
+const NAVSPLAT_KEY_BINDINGS: &[(&str, &[&str])] = &[
+    ("quit", &["esc", "ctrl-c"]),
+    ("quit_if_empty", &["q"]),
+    ("open", &["enter"]),
+    ("pop", &["backspace"]),
+    ("toggle_focus", &["tab"]),
+    ("references", &["alt-r"]),
+    ("callers", &["alt-c"]),
+    ("callees", &["alt-e"]),
+    ("source", &["alt-s"]),
+    ("copy", &["alt-y"]),
+    ("select_prev", &["ctrl-p", "up"]),
+    ("select_next", &["ctrl-n", "down"]),
+    ("preview_up", &["shift-up"]),
+    ("preview_down", &["shift-down"]),
+    ("page_up", &["pageup"]),
+    ("page_down", &["pagedown"]),
+    ("delete_next_char", &["ctrl-d"]),
+];
+
+const NAVSPLAT_ACTIONS: &[&str] = &[
+    "quit",
+    "quit_if_empty",
+    "open",
+    "pop",
+    "toggle_focus",
+    "references",
+    "callers",
+    "callees",
+    "source",
+    "copy",
+    "select_prev",
+    "select_next",
+    "preview_up",
+    "preview_down",
+    "page_up",
+    "page_down",
+    "delete_next_char",
+];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 enum SidePaneMode {
@@ -140,11 +181,13 @@ struct App {
     side_states: HashMap<String, SidePaneState>,
     side_selected: HashMap<String, usize>,
     focus: FocusArea,
+    pending_keys: Vec<KeyPress>,
     tick: u64,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let innards_config = InnardsConfig::load()?;
     let root = match cli.root {
         Some(root) => root.canonicalize()?,
         None => detect_workspace_root(env::current_dir()?)?,
@@ -152,9 +195,13 @@ fn main() -> Result<()> {
 
     let command = cli.command.unwrap_or(Commands::Pick { query: None });
     match command {
-        Commands::Pick { query } => {
-            run_picker(root, cli.editor, cli.height, query.unwrap_or_default())
-        }
+        Commands::Pick { query } => run_picker(
+            root,
+            cli.editor,
+            cli.height,
+            query.unwrap_or_default(),
+            &innards_config,
+        ),
         Commands::Symbols { query } => run_symbols(root, query),
     }
 }
@@ -218,10 +265,13 @@ fn run_picker(
     editor: Option<String>,
     height: u16,
     initial_query: String,
+    innards_config: &InnardsConfig,
 ) -> Result<()> {
     let (tx, rx) = mpsc::channel();
     let (client, mut child) = LspClient::start(root.clone(), tx)?;
     lsp::wait_for_ready(&rx, Duration::from_secs(20))?;
+    let mut keymap = Keymap::from_defaults(NAVSPLAT_KEY_BINDINGS)?;
+    keymap.apply_overrides(&innards_config.keybindings.navsplat)?;
 
     let mut terminal = TerminalGuard::enter(height)?;
     let mut app = App {
@@ -246,10 +296,11 @@ fn run_picker(
         side_states: HashMap::new(),
         side_selected: HashMap::new(),
         focus: FocusArea::Symbols,
+        pending_keys: Vec::new(),
         tick: 0,
     };
 
-    let selected = run_event_loop(&mut terminal.terminal, &mut app)?;
+    let selected = run_event_loop(&mut terminal.terminal, &mut app, &keymap)?;
     drop(terminal);
 
     app.client.shutdown();
@@ -265,6 +316,7 @@ fn run_picker(
 fn run_event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
+    keymap: &Keymap,
 ) -> Result<Option<OpenTarget>> {
     loop {
         drain_lsp_events(app);
@@ -276,7 +328,7 @@ fn run_event_loop(
         if event::poll(Duration::from_millis(40))? {
             match event::read()? {
                 Event::Key(key) => {
-                    if let Some(result) = handle_key(app, key) {
+                    if let Some(result) = handle_key(app, key, keymap) {
                         return Ok(result);
                     }
                 }
@@ -287,47 +339,70 @@ fn run_event_loop(
     }
 }
 
-fn handle_key(app: &mut App, key: KeyEvent) -> Option<Option<OpenTarget>> {
-    match key.code {
-        KeyCode::Esc => return Some(None),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Some(None),
-        KeyCode::Char('q') if app.input.value().is_empty() => return Some(None),
-        KeyCode::Enter => {
+fn handle_key(app: &mut App, key: KeyEvent, keymap: &Keymap) -> Option<Option<OpenTarget>> {
+    match keymap.match_key_for_actions(NAVSPLAT_ACTIONS, &app.pending_keys, &key) {
+        KeymapMatch::Prefix => {
+            if let Some(key) = keymap.keypress_from_event(&key) {
+                app.pending_keys.push(key);
+                app.status = pending_status(&app.pending_keys);
+            }
+            return None;
+        }
+        KeymapMatch::Action(action) => {
+            app.pending_keys.clear();
+            return handle_action(app, key, action.as_str());
+        }
+        KeymapMatch::None if !app.pending_keys.is_empty() => {
+            app.pending_keys.clear();
+            app.status = "unknown key sequence".to_string();
+            return None;
+        }
+        KeymapMatch::None => {}
+    }
+
+    handle_input_key(app, key);
+    None
+}
+
+fn handle_action(app: &mut App, key: KeyEvent, action: &str) -> Option<Option<OpenTarget>> {
+    match action {
+        "quit" => return Some(None),
+        "quit_if_empty" if app.input.value().is_empty() => return Some(None),
+        "quit_if_empty" => handle_input_key(app, key),
+        "open" => {
             if let Some(result) = handle_enter(app) {
                 return Some(result);
             }
         }
-        KeyCode::Backspace if app.promoted_symbol.is_some() => pop_navigation(app),
-        KeyCode::Tab => toggle_focus(app),
-        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::ALT) => {
-            set_side_mode(app, SidePaneMode::References)
-        }
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::ALT) => {
-            set_side_mode(app, SidePaneMode::Callers)
-        }
-        KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::ALT) => {
-            set_side_mode(app, SidePaneMode::Callees)
-        }
-        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::ALT) => {
-            set_side_mode(app, SidePaneMode::Source)
-        }
-        KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::ALT) => copy_selection(app),
-        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => select_prev(app),
-        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => select_next(app),
-        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => scroll_preview(app, -1),
-        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => scroll_preview(app, 1),
-        KeyCode::Up => select_prev(app),
-        KeyCode::Down => select_next(app),
-        KeyCode::PageUp => select_delta(app, -10),
-        KeyCode::PageDown => select_delta(app, 10),
-        KeyCode::Char('d')
-            if key.modifiers.contains(KeyModifiers::CONTROL) && app.promoted_symbol.is_none() =>
-        {
+        "pop" if app.promoted_symbol.is_some() => pop_navigation(app),
+        "pop" => handle_input_key(app, key),
+        "toggle_focus" => toggle_focus(app),
+        "references" => set_side_mode(app, SidePaneMode::References),
+        "callers" => set_side_mode(app, SidePaneMode::Callers),
+        "callees" => set_side_mode(app, SidePaneMode::Callees),
+        "source" => set_side_mode(app, SidePaneMode::Source),
+        "copy" => copy_selection(app),
+        "select_prev" => select_prev(app),
+        "select_next" => select_next(app),
+        "preview_up" => scroll_preview(app, -1),
+        "preview_down" => scroll_preview(app, 1),
+        "page_up" => select_delta(app, -10),
+        "page_down" => select_delta(app, 10),
+        "delete_next_char" if app.promoted_symbol.is_none() => {
             handle_input_request(app, InputRequest::DeleteNextChar);
         }
-        _ => handle_input_key(app, key),
+        _ => {}
     }
     None
+}
+
+fn pending_status(pending: &[KeyPress]) -> String {
+    let keys = pending
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{keys} ...")
 }
 
 fn handle_enter(app: &mut App) -> Option<Option<OpenTarget>> {
