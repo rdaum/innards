@@ -64,6 +64,8 @@ cargo install --path .
 Install directly from git:
 
 ```sh
+cargo install innards
+# or
 cargo install --git https://github.com/rdaum/innards.git
 ```
 
@@ -301,4 +303,4 @@ can also be run manually from the Actions tab.
 
 ## License
 
-`navsplat` is licensed under GPL-3.0-only. See `LICENSE`.
+`innards` is licensed under GPL-3.0-only. See `LICENSE`.

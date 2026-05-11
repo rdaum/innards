@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use navsplat::lsp::{LocationHit, Symbol};
+use innards::lsp::{LocationHit, Symbol};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};

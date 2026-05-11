@@ -1,5 +1,5 @@
 [package]
-name = "navsplat"
+name = "innards"
 version = "0.1.0"
 edition = "2024"
 description = "Inline terminal tools for Rust symbol navigation, editing, and paging"
@@ -9,6 +9,7 @@ homepage = "https://github.com/rdaum/innards"
 readme = "README.md"
 keywords = ["tui", "lsp", "rust-analyzer", "editor", "terminal"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = ["*.gif"]
 
 [dependencies]
 anyhow = "1.0.102"
