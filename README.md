@@ -26,14 +26,21 @@ Quick, and get out of your way.
   <img src="navsplat-screencast.gif" width="845" alt="navsplat inline symbol picker demo">
 </p>
 
+`inbase` as an inline interactive rebase sequence editor:
+
+<p align="center">
+  <img src="inbase-screencast.gif" width="845" alt="inbase inline interactive rebase demo">
+</p>
+
 ## Binaries
 
 - `navsplat`: rust-analyzer-backed Rust workspace symbol picker.
 - `inmacs`: inline editor with Emacs-like navigation and editing keys.
 - `inpage`: read-only inline pager with the same movement/search surface as
   `inmacs`.
+- `inbase`: inline Git interactive rebase sequence editor.
 
-All three use ratatui with an inline terminal viewport, so they open below the
+All four use ratatui with an inline terminal viewport, so they open below the
 current prompt instead of taking over the whole screen.
 
 ## Build
@@ -224,6 +231,46 @@ Esc
 q
 ```
 
+## inbase
+
+Use `inbase` as Git's interactive rebase sequence editor:
+
+```sh
+git config --global sequence.editor inbase
+# or
+GIT_SEQUENCE_EDITOR=inbase git rebase -i HEAD~8
+```
+
+`inbase` edits the rebase todo file that Git passes to `$GIT_SEQUENCE_EDITOR`.
+It writes the todo file and exits successfully when saved; abort exits non-zero
+without writing.
+
+Set the inline viewport height:
+
+```sh
+inbase --height 18 .git/rebase-merge/git-rebase-todo
+```
+
+Rebase keys:
+
+```text
+Ctrl-X Ctrl-S     Save and continue the rebase
+Ctrl-X Ctrl-C     Prompt to save, abort, or cancel
+s/a/c             Save, abort, or cancel while the quit prompt is open
+Ctrl-P/Ctrl-N     Move selection up/down
+Up/Down           Move selection up/down
+Alt-P/Alt-N       Move selected todo line up/down
+Alt-V/Ctrl-V      Page up/down
+PageUp/PageDown   Page up/down
+p                 Pick
+r                 Reword
+e                 Edit
+s                 Squash
+f                 Fixup
+d                 Drop
+x                 Exec, for existing exec lines only
+```
+
 ## Configuration
 
 Innards reads TOML configuration from:
@@ -264,6 +311,20 @@ callers = "alt-c"
 callees = "alt-e"
 source = "alt-s"
 copy = "alt-y"
+
+[keybindings.rebase]
+save = "ctrl-x ctrl-s"
+quit = "ctrl-x ctrl-c"
+select_prev = ["ctrl-p", "up"]
+select_next = ["ctrl-n", "down"]
+move_up = "alt-p"
+move_down = "alt-n"
+pick = "p"
+reword = "r"
+edit = "e"
+squash = "s"
+fixup = "f"
+drop = "d"
 ```
 
 Configured action bindings replace the built-in bindings for that action.
@@ -288,6 +349,14 @@ restore_inline, fill_paragraph, quit_view
 quit, quit_if_empty, open, pop, toggle_focus, references, callers, callees,
 source, copy, select_prev, select_next, preview_up, preview_down, page_up,
 page_down, delete_next_char
+```
+
+`inbase` actions:
+
+```text
+save, quit, select_prev, select_next, move_up, move_down, page_up, page_down,
+pick, reword, edit, squash, fixup, drop, exec, prompt_save, prompt_abort,
+prompt_cancel
 ```
 
 ## Development
