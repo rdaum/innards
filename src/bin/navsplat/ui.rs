@@ -191,23 +191,23 @@ fn symbol_list_item(symbol: &Symbol) -> ListItem<'static> {
 }
 
 fn draw_preview(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    if app.focus == FocusArea::SidePane {
-        if let Some(hit) = selected_side_hit(app) {
-            let lines = preview_file_lines(
-                &app.root,
-                &hit.file,
-                hit.line,
-                hit.line,
-                area,
-                app.preview_scroll,
-            );
-            let title = format!(" Preview {}:{} ", hit.file.display(), hit.line);
-            let preview = Paragraph::new(lines)
-                .block(Block::default().title(title).borders(Borders::ALL))
-                .wrap(Wrap { trim: false });
-            frame.render_widget(preview, area);
-            return;
-        }
+    if app.focus == FocusArea::SidePane
+        && let Some(hit) = selected_side_hit(app)
+    {
+        let lines = preview_file_lines(
+            &app.root,
+            &hit.file,
+            hit.line,
+            hit.line,
+            area,
+            app.preview_scroll,
+        );
+        let title = format!(" Preview {}:{} ", hit.file.display(), hit.line);
+        let preview = Paragraph::new(lines)
+            .block(Block::default().title(title).borders(Borders::ALL))
+            .wrap(Wrap { trim: false });
+        frame.render_widget(preview, area);
+        return;
     }
 
     let selected = active_symbol(app);

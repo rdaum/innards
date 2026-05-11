@@ -29,11 +29,11 @@ pub(super) fn copy_to_clipboard(text: &str) -> Result<String> {
             }
         };
 
-        if let Some(mut stdin) = child.stdin.take() {
-            if let Err(err) = stdin.write_all(text.as_bytes()) {
-                failures.push(format!("{program}: failed to write selection: {err}"));
-                continue;
-            }
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(err) = stdin.write_all(text.as_bytes())
+        {
+            failures.push(format!("{program}: failed to write selection: {err}"));
+            continue;
         }
         match child.wait_with_output() {
             Ok(output) if output.status.success() => return Ok(program.to_string()),

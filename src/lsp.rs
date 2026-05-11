@@ -725,16 +725,14 @@ impl WorkspaceSymbol {
     fn into_symbol(self, root: &Path) -> Option<Result<Symbol>> {
         match self {
             Self::Symbol(symbol) => Some(symbol.into_symbol(root)),
-            Self::Partial(symbol) => symbol.location.and_then(|location| {
-                Some(
-                    WorkspaceSymbolInformation {
-                        name: symbol.name,
-                        kind: symbol.kind,
-                        location,
-                        container_name: symbol.container_name,
-                    }
-                    .into_symbol(root),
-                )
+            Self::Partial(symbol) => symbol.location.map(|location| {
+                WorkspaceSymbolInformation {
+                    name: symbol.name,
+                    kind: symbol.kind,
+                    location,
+                    container_name: symbol.container_name,
+                }
+                .into_symbol(root)
             }),
         }
     }

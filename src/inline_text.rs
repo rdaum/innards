@@ -977,7 +977,7 @@ impl SyntaxHighlighter {
         })
     }
 
-    fn syntax<'a>(&'a self) -> &'a SyntaxReference {
+    fn syntax(&self) -> &SyntaxReference {
         self.syntax_set
             .find_syntax_by_name(&self.syntax_name)
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text())

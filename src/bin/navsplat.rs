@@ -567,10 +567,10 @@ fn handle_input_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_input_request(app: &mut App, request: InputRequest) {
-    if let Some(changed) = app.input.handle(request) {
-        if changed.value {
-            mark_dirty(app);
-        }
+    if let Some(changed) = app.input.handle(request)
+        && changed.value
+    {
+        mark_dirty(app);
     }
 }
 
@@ -709,13 +709,13 @@ fn current_navigation_frame(app: &App) -> Option<NavigationFrame> {
 }
 
 fn selected_open_target(app: &App) -> Option<OpenTarget> {
-    if app.focus == FocusArea::SidePane {
-        if let Some(hit) = selected_side_hit(app) {
-            return Some(OpenTarget {
-                file: hit.file.clone(),
-                line: hit.line,
-            });
-        }
+    if app.focus == FocusArea::SidePane
+        && let Some(hit) = selected_side_hit(app)
+    {
+        return Some(OpenTarget {
+            file: hit.file.clone(),
+            line: hit.line,
+        });
     }
 
     active_symbol(app).map(|symbol| OpenTarget {
@@ -725,19 +725,19 @@ fn selected_open_target(app: &App) -> Option<OpenTarget> {
 }
 
 fn selected_clipboard_text(app: &App) -> Option<String> {
-    if app.focus == FocusArea::SidePane {
-        if let Some(hit) = selected_side_hit(app) {
-            let name = hit.name.as_deref().unwrap_or("");
-            let kind = hit.kind.map(|kind| kind.label()).unwrap_or("Location");
-            return Some(format!(
-                "{}:{}:{}\t{} [{}]",
-                hit.file.display(),
-                hit.line,
-                hit.column,
-                name,
-                kind
-            ));
-        }
+    if app.focus == FocusArea::SidePane
+        && let Some(hit) = selected_side_hit(app)
+    {
+        let name = hit.name.as_deref().unwrap_or("");
+        let kind = hit.kind.map(|kind| kind.label()).unwrap_or("Location");
+        return Some(format!(
+            "{}:{}:{}\t{} [{}]",
+            hit.file.display(),
+            hit.line,
+            hit.column,
+            name,
+            kind
+        ));
     }
 
     active_symbol(app).map(|symbol| {

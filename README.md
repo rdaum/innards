@@ -294,6 +294,11 @@ cargo test --lib
 cargo build --bins
 ```
 
+GitHub Actions runs formatting, Clippy, tests, and release binary builds on
+pushes to `main` and pull requests. Pushing a `v*` tag builds the Debian package
+and uploads it to the corresponding GitHub Release; the Debian package workflow
+can also be run manually from the Actions tab.
+
 ## License
 
 `navsplat` is licensed under GPL-3.0-only. See `LICENSE`.
