@@ -12,6 +12,20 @@ viewing files but what you were working on visible.
 
 Quick, and get out of your way.
 
+## Demos
+
+`inmacs` as an inline editor:
+
+<p align="center">
+  <img src="inmacs-screencast.gif" width="845" alt="inmacs inline editor demo">
+</p>
+
+`navsplat` as an inline symbol picker:
+
+<p align="center">
+  <img src="navsplat-screencast.gif" width="845" alt="navsplat inline symbol picker demo">
+</p>
+
 ## Binaries
 
 - `navsplat`: rust-analyzer-backed Rust workspace symbol picker.
