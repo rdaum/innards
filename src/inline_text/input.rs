@@ -274,7 +274,7 @@ pub(super) fn handle_inline_action(
             Ok(None)
         }
         "fill_paragraph" if mode.is_editable() => {
-            app.fill_paragraph(app.fill_column);
+            app.fill_paragraph();
             Ok(None)
         }
         _ => Ok(None),

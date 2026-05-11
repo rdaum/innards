@@ -11,6 +11,7 @@ mod input;
 mod render;
 mod syntax;
 mod terminal;
+mod text_mode;
 
 #[cfg(test)]
 mod tests;

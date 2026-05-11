@@ -8,6 +8,7 @@ use crate::config::{Keymap, KeymapMatch};
 use super::buffer::{line_selection_range, resize_anchor_row};
 use super::editor::{Editor, SearchDirection};
 use super::input::{Outcome, handle_inline_action};
+use super::text_mode::TextMode;
 use super::*;
 
 fn test_keymap() -> Keymap {
@@ -29,7 +30,9 @@ fn editor_with(text: &str) -> Editor {
         height: DEFAULT_HEIGHT,
         restore_height: None,
         fullscreen: false,
-        fill_column: DEFAULT_FILL_COLUMN,
+        text_mode: TextMode::Plain {
+            fill_column: DEFAULT_FILL_COLUMN,
+        },
         last_drawn_height: DEFAULT_HEIGHT,
         last_drawn_top: 0,
         search: None,
@@ -37,6 +40,17 @@ fn editor_with(text: &str) -> Editor {
         undo_stack: Vec::new(),
         redo_stack: Vec::new(),
     }
+}
+
+fn commit_editor_with(text: &str) -> Editor {
+    let mut editor = editor_with(text);
+    editor.path = PathBuf::from(".git/COMMIT_EDITMSG");
+    editor.text_mode = TextMode::CommitMessage {
+        subject_column: 50,
+        body_column: 72,
+        comment_prefix: "#",
+    };
+    editor
 }
 
 #[test]
@@ -155,7 +169,8 @@ fn fill_paragraph_wraps_current_paragraph() {
     );
     editor.cursor_line = 2;
 
-    editor.fill_paragraph(24);
+    editor.text_mode = TextMode::Plain { fill_column: 24 };
+    editor.fill_paragraph();
 
     assert_eq!(
         editor.buffer.to_string(),
@@ -168,7 +183,8 @@ fn fill_paragraph_wraps_current_paragraph() {
 fn fill_paragraph_preserves_common_indent() {
     let mut editor = editor_with("    alpha beta gamma delta epsilon\n    zeta eta theta");
 
-    editor.fill_paragraph(22);
+    editor.text_mode = TextMode::Plain { fill_column: 22 };
+    editor.fill_paragraph();
 
     assert_eq!(
         editor.buffer.to_string(),
@@ -180,7 +196,8 @@ fn fill_paragraph_preserves_common_indent() {
 fn fill_paragraph_is_one_undo_step() {
     let mut editor = editor_with("one two three four five");
 
-    editor.fill_paragraph(12);
+    editor.text_mode = TextMode::Plain { fill_column: 12 };
+    editor.fill_paragraph();
     assert_eq!(editor.buffer.to_string(), "one two\nthree four\nfive");
 
     editor.undo();
@@ -357,4 +374,124 @@ fn resize_anchor_preserves_top_when_growing() {
 #[test]
 fn resize_anchor_preserves_bottom_when_shrinking() {
     assert_eq!(resize_anchor_row(8, 16, 12, 24), 12);
+}
+
+#[test]
+fn commit_mode_warns_when_subject_exceeds_fifty_columns() {
+    let editor = commit_editor_with("this subject is intentionally longer than fifty columns\n");
+
+    assert_eq!(editor.display_status(), "commit subject 55/50");
+}
+
+#[test]
+fn commit_mode_warns_when_body_lacks_separator() {
+    let editor = commit_editor_with("short subject\nbody text starts immediately\n");
+
+    assert_eq!(
+        editor.display_status(),
+        "commit body needs blank line after subject"
+    );
+}
+
+#[test]
+fn commit_mode_warns_when_body_line_exceeds_limit() {
+    let editor = commit_editor_with(
+        "short subject\n\nthis body line is intentionally long enough to exceed the seventy two column limit here\n",
+    );
+
+    assert_eq!(editor.display_status(), "commit body line 3 87/72");
+}
+
+#[test]
+fn commit_mode_fill_wraps_body_to_seventy_two_columns() {
+    let mut editor = commit_editor_with(
+        "short subject\n\nthis body line is intentionally long enough to exceed the seventy two column limit and should wrap cleanly\n",
+    );
+    editor.cursor_line = 2;
+
+    editor.fill_paragraph();
+
+    assert_eq!(
+        editor.buffer.to_string(),
+        "short subject\n\nthis body line is intentionally long enough to exceed the seventy two\ncolumn limit and should wrap cleanly\n"
+    );
+    assert_eq!(editor.status, "filled paragraph to 72");
+}
+
+#[test]
+fn commit_mode_does_not_fill_subject_or_comments() {
+    let mut editor = commit_editor_with(
+        "short subject\n\n# comment line with enough words that it would wrap if comments were fillable\n",
+    );
+
+    editor.cursor_line = 0;
+    editor.fill_paragraph();
+    assert_eq!(editor.status, "no paragraph");
+
+    editor.cursor_line = 2;
+    editor.fill_paragraph();
+    assert_eq!(editor.status, "no paragraph");
+}
+
+#[test]
+fn commit_mode_auto_wraps_body_after_typed_space() {
+    let mut editor = commit_editor_with("short subject\n\nalpha beta gamma delta");
+    editor.text_mode = TextMode::CommitMessage {
+        subject_column: 50,
+        body_column: 20,
+        comment_prefix: "#",
+    };
+    editor.cursor_line = 2;
+    editor.cursor_col = editor.line_len();
+
+    editor.insert_char(' ');
+
+    assert_eq!(
+        editor.buffer.to_string(),
+        "short subject\n\nalpha beta gamma\ndelta "
+    );
+    assert_eq!((editor.cursor_line, editor.cursor_col), (3, 6));
+}
+
+#[test]
+fn commit_mode_auto_wraps_indented_body_with_same_indent() {
+    let mut editor = commit_editor_with("short subject\n\n  alpha beta gamma delta");
+    editor.text_mode = TextMode::CommitMessage {
+        subject_column: 50,
+        body_column: 22,
+        comment_prefix: "#",
+    };
+    editor.cursor_line = 2;
+    editor.cursor_col = editor.line_len();
+
+    editor.insert_char(' ');
+
+    assert_eq!(
+        editor.buffer.to_string(),
+        "short subject\n\n  alpha beta gamma\n  delta "
+    );
+    assert_eq!((editor.cursor_line, editor.cursor_col), (3, 8));
+}
+
+#[test]
+fn auto_wrap_does_not_apply_to_plain_text_or_commit_subject() {
+    let mut editor = editor_with("alpha beta gamma delta");
+    editor.text_mode = TextMode::Plain { fill_column: 20 };
+    editor.cursor_col = editor.line_len();
+
+    editor.insert_char(' ');
+
+    assert_eq!(editor.buffer.to_string(), "alpha beta gamma delta ");
+
+    let mut editor = commit_editor_with("alpha beta gamma delta");
+    editor.text_mode = TextMode::CommitMessage {
+        subject_column: 20,
+        body_column: 20,
+        comment_prefix: "#",
+    };
+    editor.cursor_col = editor.line_len();
+
+    editor.insert_char(' ');
+
+    assert_eq!(editor.buffer.to_string(), "alpha beta gamma delta ");
 }

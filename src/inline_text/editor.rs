@@ -12,6 +12,7 @@ use super::buffer::{
     buffer_line_count, char_len, common_indent_len, find_in_line_forward, find_in_line_reverse,
     line_len_chars, line_start_char, line_text, wrap_words,
 };
+use super::text_mode::TextMode;
 use super::{MIN_HEIGHT, Mode};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -56,7 +57,7 @@ pub(super) struct Editor {
     pub(super) height: u16,
     pub(super) restore_height: Option<u16>,
     pub(super) fullscreen: bool,
-    pub(super) fill_column: usize,
+    pub(super) text_mode: TextMode,
     pub(super) last_drawn_height: u16,
     pub(super) last_drawn_top: u16,
     pub(super) search: Option<SearchState>,
@@ -81,6 +82,7 @@ impl Editor {
             }
         };
         let buffer = Rope::from_str(&content);
+        let text_mode = TextMode::for_path(&path, fill_column);
         let cursor_line = line
             .map(|line| {
                 line.saturating_sub(1)
@@ -102,7 +104,7 @@ impl Editor {
             height: height.max(MIN_HEIGHT),
             restore_height: None,
             fullscreen: false,
-            fill_column,
+            text_mode,
             last_drawn_height: height.max(MIN_HEIGHT),
             last_drawn_top: 0,
             search: None,
@@ -119,8 +121,26 @@ impl Editor {
             .write_to(&mut file)
             .with_context(|| format!("failed to write {}", self.path.display()))?;
         self.dirty = false;
-        self.status = format!("saved {}", self.path.display());
+        self.status = self
+            .commit_message_warning()
+            .unwrap_or_else(|| format!("saved {}", self.path.display()));
         Ok(())
+    }
+
+    pub(super) fn display_status(&self) -> String {
+        self.commit_message_warning()
+            .unwrap_or_else(|| self.status.clone())
+    }
+
+    pub(super) fn commit_subject_limit_for_line(&self, line: usize) -> Option<usize> {
+        let TextMode::CommitMessage { subject_column, .. } = self.text_mode else {
+            return None;
+        };
+        if self.commit_subject_line() == Some(line) {
+            Some(subject_column)
+        } else {
+            None
+        }
     }
 
     pub(super) fn line_len(&self) -> usize {
@@ -253,7 +273,54 @@ impl Editor {
         self.delete_active_region();
         self.buffer.insert_char(self.cursor_char_idx(), ch);
         self.cursor_col += 1;
+        self.auto_wrap_after_insert(ch);
         self.mark_dirty();
+    }
+
+    fn auto_wrap_after_insert(&mut self, ch: char) {
+        if !ch.is_whitespace() || ch == '\n' {
+            return;
+        }
+        let Some(column) = self.auto_wrap_column_for_current_line() else {
+            return;
+        };
+        if self.line_len() <= column {
+            return;
+        }
+
+        let line = line_text(&self.buffer, self.cursor_line);
+        let indent_len = line.chars().take_while(|ch| ch.is_whitespace()).count();
+        let Some(break_col) = line
+            .chars()
+            .enumerate()
+            .filter(|(col, ch)| *col > indent_len && *col <= column && ch.is_whitespace())
+            .map(|(col, _)| col)
+            .last()
+        else {
+            return;
+        };
+
+        let indent: String = line.chars().take(indent_len).collect();
+        let replacement = format!("\n{indent}");
+        let break_start = line_start_char(&self.buffer, self.cursor_line) + break_col;
+        self.buffer.remove(break_start..break_start + 1);
+        self.buffer.insert(break_start, &replacement);
+
+        if self.cursor_col > break_col {
+            self.cursor_line += 1;
+            self.cursor_col = indent_len + self.cursor_col - break_col - 1;
+        }
+    }
+
+    fn auto_wrap_column_for_current_line(&self) -> Option<usize> {
+        let TextMode::CommitMessage { body_column, .. } = self.text_mode else {
+            return None;
+        };
+        if self.line_is_fillable(self.cursor_line) {
+            Some(body_column)
+        } else {
+            None
+        }
     }
 
     pub(super) fn insert_newline(&mut self) {
@@ -391,7 +458,8 @@ impl Editor {
         self.mark_dirty();
     }
 
-    pub(super) fn fill_paragraph(&mut self, column: usize) {
+    pub(super) fn fill_paragraph(&mut self) {
+        let column = self.text_mode.fill_column_for_line(self.cursor_line);
         let Some((start_line, end_line)) = self.paragraph_bounds(self.cursor_line) else {
             self.status = "no paragraph".to_string();
             return;
@@ -443,17 +511,17 @@ impl Editor {
     }
 
     pub(super) fn paragraph_bounds(&self, line: usize) -> Option<(usize, usize)> {
-        if self.line_is_blank(line) {
+        if !self.line_is_fillable(line) {
             return None;
         }
 
         let mut start = line;
-        while start > 0 && !self.line_is_blank(start - 1) {
+        while start > 0 && self.line_is_fillable(start - 1) {
             start -= 1;
         }
 
         let mut end = line + 1;
-        while end < self.line_count() && !self.line_is_blank(end) {
+        while end < self.line_count() && self.line_is_fillable(end) {
             end += 1;
         }
 
@@ -462,6 +530,20 @@ impl Editor {
 
     pub(super) fn line_is_blank(&self, line: usize) -> bool {
         line_text(&self.buffer, line).trim().is_empty()
+    }
+
+    pub(super) fn line_is_fillable(&self, line: usize) -> bool {
+        if self.line_is_blank(line) {
+            return false;
+        }
+        match self.text_mode {
+            TextMode::Plain { .. } => true,
+            TextMode::CommitMessage { .. } => {
+                self.commit_body_start_line()
+                    .is_some_and(|body_start| line >= body_start)
+                    && !self.line_is_comment(line)
+            }
+        }
     }
 
     pub(super) fn move_left(&mut self) {
@@ -710,6 +792,80 @@ impl Editor {
         self.pending_keys.clear();
         self.search = None;
         self.mark = None;
-        self.status = "modified".to_string();
+        self.status = self
+            .commit_message_warning()
+            .unwrap_or_else(|| "modified".to_string());
+    }
+
+    fn line_is_comment(&self, line: usize) -> bool {
+        let TextMode::CommitMessage { comment_prefix, .. } = self.text_mode else {
+            return false;
+        };
+        line_text(&self.buffer, line)
+            .trim_start()
+            .starts_with(comment_prefix)
+    }
+
+    fn commit_subject_line(&self) -> Option<usize> {
+        if !self.text_mode.is_commit_message() {
+            return None;
+        }
+        (0..self.line_count()).find(|&line| !self.line_is_comment(line))
+    }
+
+    fn commit_body_start_line(&self) -> Option<usize> {
+        let subject = self.commit_subject_line()?;
+        let separator = subject + 1;
+        if separator >= self.line_count() || !self.line_is_blank(separator) {
+            return None;
+        }
+        let body_start = separator + 1;
+        if body_start < self.line_count() {
+            Some(body_start)
+        } else {
+            None
+        }
+    }
+
+    fn commit_has_body_text_after(&self, subject: usize) -> bool {
+        ((subject + 1)..self.line_count())
+            .filter(|&line| !self.line_is_comment(line))
+            .any(|line| !self.line_is_blank(line))
+    }
+
+    fn commit_message_warning(&self) -> Option<String> {
+        let TextMode::CommitMessage {
+            subject_column,
+            body_column,
+            ..
+        } = self.text_mode
+        else {
+            return None;
+        };
+        let subject = self.commit_subject_line()?;
+        let subject_len = line_len_chars(&self.buffer, subject);
+        if subject_len > subject_column {
+            return Some(format!("commit subject {subject_len}/{subject_column}"));
+        }
+
+        if self.commit_has_body_text_after(subject) {
+            let separator = subject + 1;
+            if separator >= self.line_count() || !self.line_is_blank(separator) {
+                return Some("commit body needs blank line after subject".to_string());
+            }
+        }
+
+        let body_start = self.commit_body_start_line()?;
+        for line in body_start..self.line_count() {
+            if self.line_is_comment(line) || self.line_is_blank(line) {
+                continue;
+            }
+            let len = line_len_chars(&self.buffer, line);
+            if len > body_column {
+                return Some(format!("commit body line {} {len}/{body_column}", line + 1));
+            }
+        }
+
+        None
     }
 }

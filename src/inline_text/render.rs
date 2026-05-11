@@ -46,7 +46,7 @@ pub(super) fn draw(
             format!("{}:{}{}  ", app.cursor_line + 1, app.cursor_col + 1, dirty),
             Style::default().fg(Color::Cyan),
         ),
-        Span::raw(app.status.clone()),
+        Span::raw(app.display_status()),
     ]);
     frame.render_widget(Paragraph::new(status), status_area);
 
@@ -87,6 +87,7 @@ fn render_lines(
             app.scroll_x,
             text_width,
             line_region,
+            app.commit_subject_limit_for_line(idx),
         ));
         output.push(Line::from(spans));
     }
@@ -106,6 +107,7 @@ fn slice_highlighted_line(
     start: usize,
     width: usize,
     selection: Option<Range<usize>>,
+    commit_subject_limit: Option<usize>,
 ) -> Vec<Span<'static>> {
     let end = start.saturating_add(width);
     let mut spans = Vec::new();
@@ -115,13 +117,14 @@ fn slice_highlighted_line(
         let base_style = syntect_style(style);
         for ch in text.chars() {
             if pos >= start && pos < end {
+                let style = commit_subject_style(base_style, pos, commit_subject_limit);
                 let style = if selection
                     .as_ref()
                     .is_some_and(|selection| selection.contains(&pos))
                 {
-                    base_style.bg(Color::DarkGray)
+                    style.bg(Color::DarkGray)
                 } else {
-                    base_style
+                    style
                 };
                 spans.push(Span::styled(ch.to_string(), style));
             }
@@ -133,6 +136,17 @@ fn slice_highlighted_line(
     }
 
     spans
+}
+
+fn commit_subject_style(style: Style, pos: usize, limit: Option<usize>) -> Style {
+    let Some(limit) = limit else {
+        return style;
+    };
+    if pos < limit {
+        style.fg(Color::Cyan)
+    } else {
+        style.fg(Color::Red).add_modifier(Modifier::BOLD)
+    }
 }
 
 fn syntect_style(style: syntect::highlighting::Style) -> Style {
@@ -157,4 +171,20 @@ fn syntect_style(style: syntect::highlighting::Style) -> Style {
         out = out.add_modifier(Modifier::UNDERLINED);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commit_subject_style_marks_limit_and_overflow_differently() {
+        let base = Style::default();
+        let in_limit = commit_subject_style(base, 49, Some(50));
+        let overflow = commit_subject_style(base, 50, Some(50));
+
+        assert_eq!(in_limit.fg, Some(Color::Cyan));
+        assert_eq!(overflow.fg, Some(Color::Red));
+        assert!(overflow.add_modifier.contains(Modifier::BOLD));
+    }
 }

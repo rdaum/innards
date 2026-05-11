@@ -179,7 +179,7 @@ Ctrl-G            Cancel active mark outside search
 Ctrl-A/Ctrl-E     Start/end of line
 Ctrl-B/Ctrl-F     Character left/right
 Alt-B/Alt-F       Word left/right
-Alt-Q             Fill/reflow the current paragraph to 80 columns
+Alt-Q             Fill/reflow the current paragraph
 Ctrl-Left/Right   Word left/right
 Ctrl-P/Ctrl-N     Line up/down
 Alt-V/Ctrl-V      Page up/down
@@ -196,6 +196,11 @@ Ctrl-/ Ctrl-_     Undo
 Ctrl-7            Undo
 Ctrl-?            Redo, where the terminal reports it distinctly
 ```
+
+When editing Git commit message files such as `COMMIT_EDITMSG`, `inmacs`
+uses commit-message rules: 50 columns for the subject, 72 columns for body
+fill and auto-wrap, a required blank line before the body, and ignored `#`
+comment lines.
 
 `inmacs` uses `ropey` internally for text storage and `syntect` for syntax
 highlighting.
