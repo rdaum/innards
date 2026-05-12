@@ -1,21 +1,16 @@
 use std::env;
 use std::io::{self, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 use anyhow::{Result, anyhow};
 
 pub(super) fn copy_to_clipboard(text: &str) -> Result<String> {
-    let commands: &[(&str, &[&str])] = &[
-        ("wl-copy", &[]),
-        ("xclip", &["-selection", "clipboard"]),
-        ("xsel", &["--clipboard", "--input"]),
-        ("pbcopy", &[]),
-    ];
+    let commands = clipboard_commands();
     let mut failures = Vec::new();
 
-    for (program, args) in commands {
+    for (program, args) in &commands {
         let mut child = match Command::new(program)
-            .args(*args)
+            .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -29,11 +24,12 @@ pub(super) fn copy_to_clipboard(text: &str) -> Result<String> {
             }
         };
 
-        if let Some(mut stdin) = child.stdin.take()
-            && let Err(err) = stdin.write_all(text.as_bytes())
-        {
+        if let Err(err) = write_clipboard_stdin(&mut child, text) {
             failures.push(format!("{program}: failed to write selection: {err}"));
             continue;
+        }
+        if clipboard_owner_stays_running(program) {
+            return Ok(program.to_string());
         }
         match child.wait_with_output() {
             Ok(output) if output.status.success() => return Ok(program.to_string()),
@@ -58,6 +54,46 @@ pub(super) fn copy_to_clipboard(text: &str) -> Result<String> {
             failures.join("; ")
         )),
     }
+}
+
+fn write_clipboard_stdin(child: &mut Child, text: &str) -> io::Result<()> {
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(text.as_bytes())?;
+    }
+    Ok(())
+}
+
+fn clipboard_owner_stays_running(program: &str) -> bool {
+    matches!(program, "xclip" | "xsel")
+}
+
+fn clipboard_commands() -> Vec<(&'static str, Vec<&'static str>)> {
+    clipboard_commands_for(
+        env::var_os("WAYLAND_DISPLAY").is_some(),
+        env::var_os("DISPLAY").is_some(),
+    )
+}
+
+fn clipboard_commands_for(
+    has_wayland: bool,
+    has_x11: bool,
+) -> Vec<(&'static str, Vec<&'static str>)> {
+    let mut commands = Vec::new();
+
+    if has_wayland {
+        commands.push(("wl-copy", vec![]));
+    }
+    if has_x11 {
+        commands.push(("xclip", vec!["-selection", "clipboard"]));
+        commands.push(("xsel", vec!["--clipboard", "--input"]));
+    }
+    commands.push(("pbcopy", vec![]));
+    if !has_wayland && !has_x11 {
+        commands.push(("wl-copy", vec![]));
+        commands.push(("xclip", vec!["-selection", "clipboard"]));
+        commands.push(("xsel", vec!["--clipboard", "--input"]));
+    }
+    commands
 }
 
 fn copy_with_osc52(text: &str) -> Result<()> {
@@ -97,4 +133,33 @@ fn base64_encode(input: &[u8]) -> String {
     }
 
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn x11_prefers_xclip_without_wayland_probe() {
+        let commands = clipboard_commands_for(false, true);
+
+        assert_eq!(commands[0].0, "xclip");
+        assert!(commands.iter().all(|(program, _)| *program != "wl-copy"));
+    }
+
+    #[test]
+    fn wayland_prefers_wl_copy() {
+        let commands = clipboard_commands_for(true, true);
+
+        assert_eq!(commands[0].0, "wl-copy");
+        assert!(commands.iter().any(|(program, _)| *program == "xclip"));
+    }
+
+    #[test]
+    fn x11_clipboard_owners_are_not_waited_on() {
+        assert!(clipboard_owner_stays_running("xclip"));
+        assert!(clipboard_owner_stays_running("xsel"));
+        assert!(!clipboard_owner_stays_running("wl-copy"));
+        assert!(!clipboard_owner_stays_running("pbcopy"));
+    }
 }

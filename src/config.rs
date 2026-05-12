@@ -27,6 +27,7 @@ pub struct ConfigKeybindings {
     pub inline: HashMap<String, BindingList>,
     pub navsplat: HashMap<String, BindingList>,
     pub rebase: HashMap<String, BindingList>,
+    pub log: HashMap<String, BindingList>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -66,6 +67,8 @@ struct RawKeybindings {
     navsplat: HashMap<String, BindingList>,
     #[serde(default)]
     rebase: HashMap<String, BindingList>,
+    #[serde(default)]
+    log: HashMap<String, BindingList>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -111,6 +114,7 @@ impl InnardsConfig {
                 inline: raw.keybindings.inline,
                 navsplat: raw.keybindings.navsplat,
                 rebase: raw.keybindings.rebase,
+                log: raw.keybindings.log,
             },
         })
     }
@@ -356,6 +360,10 @@ mod tests {
             [keybindings.rebase]
             save = "ctrl-x ctrl-s"
             move_up = "alt-p"
+
+            [keybindings.log]
+            toggle_expand = "/"
+            copy = "alt-y"
             "#,
         )
         .unwrap();
@@ -366,5 +374,7 @@ mod tests {
         assert!(raw.keybindings.navsplat.contains_key("open"));
         assert!(raw.keybindings.rebase.contains_key("save"));
         assert!(raw.keybindings.rebase.contains_key("move_up"));
+        assert!(raw.keybindings.log.contains_key("toggle_expand"));
+        assert!(raw.keybindings.log.contains_key("copy"));
     }
 }

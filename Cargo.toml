@@ -35,7 +35,7 @@ Innards is a set of inline terminal tools for moving through source code
 without losing shell context. It includes navsplat, a rust-analyzer-backed
 symbol picker; inmacs, a small inline editor; and inpage, a read-only inline
 pager. It also includes inbase, an inline Git interactive rebase sequence
-editor.
+editor, and inlog, an inline Git log browser.
 """
 section = "utils"
 priority = "optional"
@@ -45,6 +45,7 @@ assets = [
     ["target/release/inmacs", "usr/bin/inmacs", "755"],
     ["target/release/inpage", "usr/bin/inpage", "755"],
     ["target/release/inbase", "usr/bin/inbase", "755"],
+    ["target/release/inlog", "usr/bin/inlog", "755"],
     ["README.md", "usr/share/doc/innards/README.md", "644"],
     ["LICENSE", "usr/share/doc/innards/LICENSE", "644"],
 ]

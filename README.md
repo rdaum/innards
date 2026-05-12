@@ -37,6 +37,12 @@ Basically: Quick to start, and get out of your way quickly after.
   <img src="inbase-screencast.gif" width="845" alt="inbase inline interactive rebase demo">
 </p>
 
+`inlog` as an inline Git log browser:
+
+<p align="center">
+  <img src="inlog-screencast.gif" width="845" alt="inlog inline Git log browser demo">
+</p>
+
 ## Binaries
 
 - `navsplat`: rust-analyzer-backed Rust workspace symbol picker.
@@ -44,8 +50,9 @@ Basically: Quick to start, and get out of your way quickly after.
 - `inpage`: read-only inline pager with the same movement/search surface as
   `inmacs`.
 - `inbase`: inline Git interactive rebase sequence editor.
+- `inlog`: inline Git log browser.
 
-All four use ratatui with an inline terminal viewport, so they open below the
+All five use ratatui with an inline terminal viewport, so they open below the
 current prompt instead of taking over the whole screen.
 
 ## Build
@@ -278,6 +285,48 @@ d                 Drop
 x                 Exec, for existing exec lines only
 ```
 
+## inlog
+
+Browse Git history in an inline log viewer:
+
+```sh
+inlog
+inlog -- --author ryan --since 2.weeks
+inlog -- origin/main..HEAD -- src/inline_text.rs
+```
+
+`inlog` passes normal `git log` filters, revisions, paths, and sorting options
+through to Git, but does not support `--graph`. If no max-count option is
+provided, it loads the most recent 500 commits. When `inlog` exits, it collapses
+the inline viewport and prints a compact highlighted summary for the selected
+commit with the subject capped at 50 characters.
+
+Set the inline viewport height:
+
+```sh
+inlog --height 24 -- -n 100
+```
+
+Log keys:
+
+```text
+Ctrl-S            Incremental search forward
+Ctrl-R            Incremental search backward
+Enter             Select commit, copy SHA, and quit; finish search while searching
+Esc, Ctrl-G       Cancel search while searching
+Ctrl-P/Ctrl-N     Move selection up/down
+Up/Down           Move selection up/down
+Alt-V/Ctrl-V      Page up/down
+PageUp/PageDown   Page up/down
+Alt-Up/Alt-Down   Shrink/grow the inline viewport
+Ctrl-X 1          Expand to the full terminal height
+Ctrl-X 0          Restore the previous inline height
+/                 Expand/collapse the selected commit message
+Alt-Y             Copy the selected full SHA
+q, Esc            Quit
+Ctrl-X Ctrl-C     Quit
+```
+
 ## Configuration
 
 Innards reads TOML configuration from:
@@ -332,6 +381,20 @@ edit = "e"
 squash = "s"
 fixup = "f"
 drop = "d"
+
+[keybindings.log]
+quit = ["ctrl-x ctrl-c", "esc", "q"]
+search_forward = "ctrl-s"
+search_reverse = "ctrl-r"
+select_prev = ["ctrl-p", "up"]
+select_next = ["ctrl-n", "down"]
+shrink_height = "alt-up"
+grow_height = "alt-down"
+fullscreen = "ctrl-x 1"
+restore_inline = "ctrl-x 0"
+toggle_expand = "/"
+copy = "alt-y"
+accept = "enter"
 ```
 
 Configured action bindings replace the built-in bindings for that action.
@@ -364,6 +427,14 @@ page_down, delete_next_char
 save, quit, select_prev, select_next, move_up, move_down, page_up, page_down,
 pick, reword, edit, squash, fixup, drop, exec, prompt_save, prompt_abort,
 prompt_cancel
+```
+
+`inlog` actions:
+
+```text
+quit, search_forward, search_reverse, cancel_search, finish_search,
+search_backspace, select_prev, select_next, page_up, page_down, shrink_height,
+grow_height, fullscreen, restore_inline, toggle_expand, copy, accept
 ```
 
 ## Development
